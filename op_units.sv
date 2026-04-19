@@ -1,59 +1,36 @@
 `timescale 1ns / 1ps
-//////////////////////////////////////////////////////////////////////////////////
-// Company: 
-// Engineer: 
-// 
-// Create Date: 12/27/2025 09:59:06 PM
-// Design Name: 
-// Module Name: op_units
-// Project Name: 
-// Target Devices: 
-// Tool Versions: 
-// Description: 
-// 
-// Dependencies: 
-// 
-// Revision:
-// Revision 0.01 - File Created
-// Additional Comments:
-// 
-//////////////////////////////////////////////////////////////////////////////////
 
-
-module int_add ( //probably wrong
-input  logic [15:0] a,
-input  logic [15:0] b,
-input  logic        clk,
-input  logic        rst_n,
-output logic [31:0] result
+module int_mul (
+    input  logic signed [7:0]  a,
+    input  logic signed [7:0]  b,
+    input  logic               clk,
+    input  logic               rst_n,
+    output logic signed [31:0] result
 );
-
-assign result = a + b;
-
+    logic signed [31:0] a_ext, b_ext;
+    assign a_ext = {{24{a[7]}}, a};
+    assign b_ext = {{24{b[7]}}, b};
+    assign result = a_ext * b_ext;
 endmodule
 
 
-module bias_add ( //probably wrong
-input  logic [15:0] a,
-input  logic [15:0] b,
-input  logic        clk,
-input  logic        rst_n,
-output logic [31:0] result
+module int_add (
+    input  logic signed [31:0] a,
+    input  logic signed [31:0] b,
+    input  logic               clk,
+    input  logic               rst_n,
+    output logic signed [31:0] result
 );
-
-assign result = a + b;
-
+    assign result = a + b;
 endmodule
 
 
-module int_mul ( //probably wrong
-input  logic [7:0] a,
-input  logic [7:0] b,
-input  logic        clk,
-input  logic        rst_n,
-output logic [15:0] result
+module bias_add (
+    input  logic signed [31:0] a,
+    input  logic signed [31:0] b,
+    input  logic               clk,
+    input  logic               rst_n,
+    output logic signed [31:0] result
 );
-
-assign result  = a * b;
-
+    assign result = a + b;
 endmodule

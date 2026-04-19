@@ -1,180 +1,120 @@
 `timescale 1ns / 1ps
-//////////////////////////////////////////////////////////////////////////////////
-// Company: 
-// Engineer: 
-// 
-// Create Date: 12/27/2025 10:00:55 PM
-// Design Name: 
-// Module Name: top
-// Project Name: 
-// Target Devices: 
-// Tool Versions: 
-// Description: 
-// 
-// Dependencies: 
-// 
-// Revision:
-// Revision 0.01 - File Created
-// Additional Comments:
-// 
-//////////////////////////////////////////////////////////////////////////////////
 
-
-
-
+// Simple verification testbench.
+// Input: 5x5, C_in=1, all activations = 1
+// Weights: K=3, C_in=1, C_out=1, all weights = 1
+// Bias = 0
+// Expected output: 3x3, all values = 9 (= 3*3*1*1*1)
 module top();
 
-    // Clock and reset
-    logic clk;
-    logic rst_n;
-    
-    // Input buffers
-    logic [15:0] weight_buffer [223:0];
-    logic [15:0] i_buffer [223:0];
-    logic [15:0] bias [31:0];
-    
-    // Configuration
-    logic [31:0] C_out;
-    logic [31:0] H_out;
-    logic [31:0] W_out;
-    logic [31:0] C_in;
-    logic [31:0] stride;
-    logic [31:0] W_in;
-    logic [31:0] weight_base;
+    logic clk, rst_n;
 
-    // Control
+    // Buffers: sized for 5x5x1 input (25 entries), 9 weights, 9 output pixels
+    localparam IBUF = 32;
+    localparam WBUF = 32;
+    localparam OBUF = 32;
+
+    logic signed [7:0]  weight_buffer [WBUF-1:0];
+    logic signed [7:0]  i_buffer      [IBUF-1:0];
+    logic signed [31:0] bias          [31:0];
+
+    logic [31:0] C_out, H_out, W_out, C_in, stride, W_in, weight_base;
     logic start_process;
 
+    logic signed [7:0] output_buffer [OBUF-1:0];
+    logic done;
 
-    // ========================================
-    // DUT Instantiation (K=3, 64 MACs)
-    // ========================================
-
-    conv_2d #(.K(3), .NUM_MACS(64)) dut (
-        .clk(clk),
+    conv_2d #(
+        .K(3), .NUM_MACS(64),
+        .IBUF_DEPTH(IBUF), .WBUF_DEPTH(WBUF), .OBUF_DEPTH(OBUF)
+    ) dut (
+        .clk(clk), .rst_n(rst_n),
         .weight_buffer(weight_buffer),
         .i_buffer(i_buffer),
-        .C_out(C_out),
-        .H_out(H_out),
-        .W_out(W_out),
-        .C_in(C_in),
         .bias(bias),
-        .stride(stride),
-        .W_in(W_in),
+        .C_out(C_out), .H_out(H_out), .W_out(W_out),
+        .C_in(C_in), .stride(stride), .W_in(W_in),
         .weight_base(weight_base),
         .start_process(start_process),
-        .rst_n(rst_n)
+        .output_buffer(output_buffer),
+        .done(done)
     );
-    
-    
-    // ========================================
-    // Clock Generation
-    // ========================================
-    
+
+    // 100 MHz clock
     initial begin
         clk = 0;
-        forever #5 clk = ~clk;  // 100 MHz
+        forever #5 clk = ~clk;
     end
-    
-    
-    // ========================================
-    // Initialize Buffers
-    // ========================================
-    
-    initial begin
-        // Fill input buffer with test pattern
-        for (int y = 0; y < 224; y++) begin
-            for (int x = 0; x < 16; x++) begin
-                // Simple pattern: 1.0 + position offset
-                i_buffer[y][x] = y[15:0] + x[15:0];
-            end
-        end
-        
-        // Fill weight buffer with test pattern
-        for (int i = 0; i < 224; i++) begin
-            for (int j = 0; j < 16; j++) begin
-                // All weights = 0.5 for simplicity
-                weight_buffer[i][j] = 1'd1;
-            end
-        end
 
-        for (int i = 0; i < 224; i++) begin
-            for (int j = 0; j < 16; j++) begin
-                // All weights = 0.5 for simplicity
-                bias[i][j] = 16'h030F + i[15:0] + j[15:0];
-            end
-        end
-    end
-    
-    
-    // ========================================
-    // Monitor outputs
-    // ========================================
-   
-    
-    
-    // ========================================
-    // Test Stimulus
-    // ========================================
-    
+    // Configuration: 5x5 input, K=3, C_in=1, C_out=1, stride=1
+    // Output size = (5-3)/1+1 = 3x3
     initial begin
-        $display("========================================");
-        $display("Conv2D Testbench");
-        $display("========================================\n");
-        
-        // Initialize
-        rst_n = 0;
+        rst_n         = 0;
         start_process = 0;
+        C_in          = 1;
+        C_out         = 1;
+        stride        = 1;
+        W_in          = 5;
+        H_out         = 3;
+        W_out         = 3;
+        weight_base   = 0;
 
-        
-        // Configuration
-        //C_in = 3;           // RGB
-        C_out = 16;         // First YOLO layer output channels
-        stride = 1;         // No downsampling
-        W_in = 224;         // Input width
-        H_out = (W_in - 3) / 1 + 1;  // 222
-        W_out = (W_in - 3) / 1 + 1;  // 222
-        weight_base = 0;    // Weights start at 0
+        // All activations = 1
+        for (int i = 0; i < IBUF; i++) i_buffer[i] = 8'sd0;
+        for (int y = 0; y < 5; y++)
+            for (int x = 0; x < 5; x++)
+                i_buffer[y * 5 * 1 + x * 1 + 0] = 8'sd1;
 
-        $display("Configuration:");
-        $display("  C_in = %0d", C_in);
-        $display("  C_out = %0d", C_out);
-        $display("  stride = %0d", stride);
-        $display("  W_in = %0d", W_in);
-        $display("  Kernel = 3x3");
-        $display("  NUM_MACS = 64\n");
-        
-        // Reset
+        // All weights = 1
+        for (int i = 0; i < WBUF; i++) weight_buffer[i] = 8'sd0;
+        for (int co = 0; co < 1; co++)
+            for (int ky = 0; ky < 3; ky++)
+                for (int kx = 0; kx < 3; kx++)
+                    weight_buffer[co*9 + ky*3 + kx] = 8'sd1;
+
+        // Zero bias
+        for (int i = 0; i < 32; i++) bias[i] = 32'sd0;
+
         repeat(5) @(posedge clk);
         rst_n = 1;
         repeat(2) @(posedge clk);
-        
-        $display("Starting convolution...\n");
-        
-        // Start processing
+
+        $display("Starting conv2d: 5x5 input, K=3, C_in=1, C_out=1, stride=1");
+        $display("Expected output: all 9s in a 3x3 grid");
+
         start_process = 1;
         @(posedge clk);
         start_process = 0;
-        
-        // Let it run for some cycles
-        repeat(10000) @(posedge clk);
-        
-        // Check if done signal appears
-      
-        $display("\nFinal position: (y=%0d, x=%0d, c=%0d)", 
-                 dut.y_out, dut.x_out, dut.c_out);
-        
-        repeat(10) @(posedge clk);
-        
-        $display("\n========================================");
-        $display("Test complete");
-        $display("========================================");
-        
+
+        // Wait for done
+        @(posedge done);
+        @(posedge clk);
+
+        $display("\nOutput buffer (3x3, C_out=1):");
+        for (int y = 0; y < 3; y++) begin
+            for (int x = 0; x < 3; x++) begin
+                $write("  %0d", $signed(output_buffer[y*3*1 + x*1 + 0]));
+            end
+            $display("");
+        end
+
+        // Check correctness
+        begin
+            int errors = 0;
+            for (int y = 0; y < 3; y++)
+                for (int x = 0; x < 3; x++)
+                    if ($signed(output_buffer[y*3 + x]) !== 8'sd9) begin
+                        $display("FAIL at (%0d,%0d): got %0d, expected 9", y, x,
+                                 $signed(output_buffer[y*3 + x]));
+                        errors++;
+                    end
+            if (errors == 0)
+                $display("\nPASS: all outputs correct");
+            else
+                $display("\nFAIL: %0d errors", errors);
+        end
+
         $finish;
     end
-    
-    
 
-    
-  
 endmodule
