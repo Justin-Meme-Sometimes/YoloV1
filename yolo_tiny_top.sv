@@ -52,6 +52,149 @@ module yolo_tiny_top #(
 
     state_t state;
 
+    // ----------------------------------------------------------------
+    // Feature map ping-pong buffers + special-purpose buffers
+    // ----------------------------------------------------------------
+    logic signed [7:0] buf_a      [BUF_DEPTH-1:0];   // ping-pong side A
+    logic signed [7:0] buf_b      [BUF_DEPTH-1:0];   // ping-pong side B
+    logic signed [7:0] route_buf  [ROUTE_DEPTH-1:0]; // saved 26x26x256
+    logic signed [7:0] route8_buf [BUF_DEPTH-1:0];   // saved 13x13x256 (conv8 out)
+    logic signed [7:0] up_buf     [BUF_DEPTH-1:0];   // upsample output
+    logic signed [7:0] cat_obuf   [BUF_DEPTH-1:0];   // concat output
+
+    // ping=0: submodule reads buf_a, writes result into buf_b
+    // ping=1: submodule reads buf_b, writes result into buf_a
+    logic ping;
+
+    // ----------------------------------------------------------------
+    // Layer configuration registers (set in each _START state)
+    // ----------------------------------------------------------------
+    logic [31:0] cfg_H_in, cfg_W_in, cfg_C_in;
+    logic [31:0] cfg_H_out, cfg_W_out, cfg_C_out;
+    logic [31:0] cfg_stride;
+    logic [31:0] cfg_weight_base;
+    logic [31:0] cfg_bias_base;
+
+    // ----------------------------------------------------------------
+    // Conv submodule
+    // ----------------------------------------------------------------
+    logic signed [7:0]  conv_ibuf [BUF_DEPTH-1:0];
+    logic signed [7:0]  conv_obuf [BUF_DEPTH-1:0];
+    logic signed [31:0] conv_bias [31:0];
+    logic               conv_start, conv_done;
+
+    assign conv_ibuf = ping ? buf_b : buf_a;
+
+    always_comb begin
+        for(int i = 0; i < 32; i++) begin
+            conv_bias[i] = bias_buf[cfg_bias_base + i];
+        end
+    end
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if(rst_n && conv_done) begin
+            if (ping) buf_a <= conv_obuf;
+            else      buf_b <= conv_obuf;
+        end
+    end
+
+    conv_2d #(
+        .K(3), .NUM_MACS(64),
+        .IBUF_DEPTH(BUF_DEPTH),
+        .WBUF_DEPTH(WEIGHT_DEPTH),
+        .OBUF_DEPTH(BUF_DEPTH)
+    ) u_conv (
+        .clk(clk), .rst_n(rst_n),
+        .weight_buffer(weight_buf),
+        .i_buffer(conv_ibuf),
+        .bias(conv_bias),
+        .C_out(cfg_C_out), .H_out(cfg_H_out), .W_out(cfg_W_out),
+        .C_in(cfg_C_in),   .stride(cfg_stride), .W_in(cfg_W_in),
+        .weight_base(cfg_weight_base),
+        .start_process(conv_start),
+        .output_buffer(conv_obuf),
+        .done(conv_done)
+    );
+
+    // ----------------------------------------------------------------
+    // MaxPool submodule
+    // ----------------------------------------------------------------
+    logic signed [7:0] pool_ibuf [BUF_DEPTH-1:0];
+    logic signed [7:0] pool_obuf [BUF_DEPTH-1:0];
+    logic              pool_start, pool_done;
+
+    always_comb begin
+        pool_ibuf = ping ? buf_b : buf_a;
+    end
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (rst_n && pool_done) begin
+            if (ping) buf_a <= pool_obuf;
+            else      buf_b <= pool_obuf;
+        end
+    end
+
+    maxpool2d #(
+        .IBUF_DEPTH(BUF_DEPTH),
+        .OBUF_DEPTH(BUF_DEPTH)
+    ) u_pool (
+        .clk(clk), .rst_n(rst_n),
+        .i_buffer(pool_ibuf),
+        .H_in(cfg_H_in), .W_in(cfg_W_in), .C(cfg_C_in),
+        .start(pool_start),
+        .o_buffer(pool_obuf),
+        .done(pool_done)
+    );
+
+    logic signed [7:0] up_ibuf [BUF_DEPTH-1:0];
+    logic signed [7:0] up_obuf [BUF_DEPTH-1:0];
+    logic              up_start, up_done;
+
+    always_comb begin
+       up_ibuf = ping ? buf_b : buf_a;
+    end
+    
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (rst_n && up_done) begin
+            up_buf <= up_obuf;
+        end
+    end
+
+    upsample #(
+        .IBUF_DEPTH(BUF_DEPTH),
+        .OBUF_DEPTH(BUF_DEPTH)
+    ) u_up (
+        .clk(clk), .rst_n(rst_n),
+        .i_buffer(up_ibuf),
+        .H_in(cfg_H_in), .W_in(cfg_W_in), .C(cfg_C_in),
+        .start(up_start),
+        .o_buffer(up_obuf),
+        .done(up_done)
+    );
+
+    // ----------------------------------------------------------------
+    // Route/concat submodule
+    // ----------------------------------------------------------------
+    logic cat_start, cat_done;
+    route_concat #(
+        .ABUF_DEPTH(BUF_DEPTH),
+        .BBUF_DEPTH(ROUTE_DEPTH),
+        .OBUF_DEPTH(BUF_DEPTH)
+    ) u_concat (
+        .clk(clk), .rst_n(rst_n),
+        .a_buffer(up_buf),
+        .b_buffer(route_buf),
+        .H(cfg_H_out), .W(cfg_W_out),
+        .C_a(cfg_C_in), .C_b(32'd256),
+        .start(cat_start),
+        .o_buffer(cat_obuf),
+        .done(cat_done)
+    );
+
+    // ----------------------------------------------------------------
+    // FSM
+    // ----------------------------------------------------------------
+    
 endmodule
 
 
