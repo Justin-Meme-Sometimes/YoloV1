@@ -22,35 +22,7 @@ module yolo_tiny_top #(
     output logic done
 );
 
-    typedef enum logic [5:0] {
-        IDLE,
-        CONV1_START,  CONV1_WAIT,   // 416x416x3  → 416x416x16,  K=3
-        POOL1_START,  POOL1_WAIT,   // 416x416x16 → 208x208x16
-        CONV2_START,  CONV2_WAIT,   // 208x208x16 → 208x208x32,  K=3
-        POOL2_START,  POOL2_WAIT,   // 208x208x32 → 104x104x32
-        CONV3_START,  CONV3_WAIT,   // 104x104x32 → 104x104x64,  K=3
-        POOL3_START,  POOL3_WAIT,   // 104x104x64 → 52x52x64
-        CONV4_START,  CONV4_WAIT,   // 52x52x64   → 52x52x128,   K=3
-        POOL4_START,  POOL4_WAIT,   // 52x52x128  → 26x26x128
-        CONV5_START,  CONV5_WAIT,   // 26x26x128  → 26x26x256,   K=3
-        SAVE_ROUTE,                 // snapshot conv5 output → route_buf
-        POOL5_START,  POOL5_WAIT,   // 26x26x256  → 13x13x256
-        CONV6_START,  CONV6_WAIT,   // 13x13x256  → 13x13x512,   K=3
-        POOL6_START,  POOL6_WAIT,   // 13x13x512  → 13x13x512  (stride-1 pool)
-        CONV7_START,  CONV7_WAIT,   // 13x13x512  → 13x13x1024, K=3
-        CONV8_START,  CONV8_WAIT,   // 13x13x1024 → 13x13x256,  K=1  ← route src
-        CONV9_START,  CONV9_WAIT,   // 13x13x256  → 13x13x512,  K=3
-        YOLO1,                      // det1_buf = current output buf
-        ROUTE_RESTORE,              // reload conv8 output as input
-        CONV10_START, CONV10_WAIT,  // 13x13x256  → 13x13x128,  K=1
-        UPSAMP_START, UPSAMP_WAIT,  // 13x13x128  → 26x26x128
-        CONCAT_START, CONCAT_WAIT,  // 26x26x128 ++ 26x26x256 → 26x26x384
-        CONV11_START, CONV11_WAIT,  // 26x26x384  → 26x26x256,  K=3
-        YOLO2,                      // det2_buf = current output buf
-        ALL_DONE
-    } state_t;
-
-    state_t state;
+   
 
     // ----------------------------------------------------------------
     // Feature map ping-pong buffers + special-purpose buffers
@@ -194,7 +166,85 @@ module yolo_tiny_top #(
     // ----------------------------------------------------------------
     // FSM
     // ----------------------------------------------------------------
-    
+     typedef enum logic [5:0] {
+        IDLE,
+        CONV1_START,  CONV1_WAIT,   // 416x416x3  → 416x416x16,  K=3
+        POOL1_START,  POOL1_WAIT,   // 416x416x16 → 208x208x16
+        CONV2_START,  CONV2_WAIT,   // 208x208x16 → 208x208x32,  K=3
+        POOL2_START,  POOL2_WAIT,   // 208x208x32 → 104x104x32
+        CONV3_START,  CONV3_WAIT,   // 104x104x32 → 104x104x64,  K=3
+        POOL3_START,  POOL3_WAIT,   // 104x104x64 → 52x52x64
+        CONV4_START,  CONV4_WAIT,   // 52x52x64   → 52x52x128,   K=3
+        POOL4_START,  POOL4_WAIT,   // 52x52x128  → 26x26x128
+        CONV5_START,  CONV5_WAIT,   // 26x26x128  → 26x26x256,   K=3
+        SAVE_ROUTE,                 // snapshot conv5 output → route_buf
+        POOL5_START,  POOL5_WAIT,   // 26x26x256  → 13x13x256
+        CONV6_START,  CONV6_WAIT,   // 13x13x256  → 13x13x512,   K=3
+        POOL6_START,  POOL6_WAIT,   // 13x13x512  → 13x13x512  (stride-1 pool)
+        CONV7_START,  CONV7_WAIT,   // 13x13x512  → 13x13x1024, K=3
+        CONV8_START,  CONV8_WAIT,   // 13x13x1024 → 13x13x256,  K=1  ← route src
+        CONV9_START,  CONV9_WAIT,   // 13x13x256  → 13x13x512,  K=3
+        YOLO1,                      // det1_buf = current output buf
+        ROUTE_RESTORE,              // reload conv8 output as input
+        CONV10_START, CONV10_WAIT,  // 13x13x256  → 13x13x128,  K=1
+        UPSAMP_START, UPSAMP_WAIT,  // 13x13x128  → 26x26x128
+        CONCAT_START, CONCAT_WAIT,  // 26x26x128 ++ 26x26x256 → 26x26x384
+        CONV11_START, CONV11_WAIT,  // 26x26x384  → 26x26x256,  K=3
+        YOLO2,                      // det2_buf = current output buf
+        ALL_DONE
+    } state_t;
+
+    state_t current_state, next_state;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if(!rst_n) begin
+            current_state <= IDLE;
+        end else begin
+            current_state <= next_state;
+        end
+    end
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            ping       <= 0;
+            route_buf  <= '{default: '0};
+            route8_buf <= '{default: '0};
+            det1_buf   <= '{default: '0};
+            det2_buf   <= '{default: '0};
+        end else begin
+            // flip ping when a conv or pool layer finishes
+            if ((conv_done && (current_state == CONV1_WAIT  || current_state == CONV2_WAIT  ||
+                               current_state == CONV3_WAIT  || current_state == CONV4_WAIT  ||
+                               current_state == CONV5_WAIT  || current_state == CONV6_WAIT  ||
+                               current_state == CONV7_WAIT  || current_state == CONV9_WAIT  ||
+                               current_state == CONV10_WAIT || current_state == CONV11_WAIT)) ||
+                (pool_done && (current_state == POOL1_WAIT  || current_state == POOL2_WAIT  ||
+                               current_state == POOL3_WAIT  || current_state == POOL4_WAIT  ||
+                               current_state == POOL5_WAIT  || current_state == POOL6_WAIT)) ||
+                (cat_done  &&  current_state == CONCAT_WAIT))
+            begin
+                ping <= ~ping;
+            end
+        end
+    end
+
+    always_comb begin
+        next_state = current_state;
+        conv_start = 0;
+        pool_start = 0;
+        up_start = 0;
+        cat_start = 0;
+        done = 0;
+        case(current_state)
+            IDLE: begin
+                conv_start = 0;
+                pool_start = 0;
+                up_start = 0;
+                cat_start = 0;
+                done = 0;
+            end
+        endcase
+    end
 endmodule
 
 
