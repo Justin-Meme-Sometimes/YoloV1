@@ -1,8 +1,8 @@
 `timescale 1ns / 1ps
 
 module yolo_tiny_top #(
-    parameter WEIGHT_DEPTH  = 1 << 20,   // all layer weights concatenated
-    parameter BIAS_DEPTH    = 256,        // enough for all C_out across all layers
+    parameter WEIGHT_DEPTH  = 8649648,   // all layer weights concatenated
+    parameter BIAS_DEPTH    = 4096,       // enough for all C_out across all layers
     parameter IMG_DEPTH     = 519168,     // 416x416x3
     parameter BUF_DEPTH     = 2752512,    // 416x416x16 — largest intermediate
     parameter ROUTE_DEPTH   = 172032,     // 26x26x256 — saved feature map
@@ -44,7 +44,7 @@ module yolo_tiny_top #(
     logic [31:0] cfg_H_in, cfg_W_in, cfg_C_in;
     logic [31:0] cfg_H_out, cfg_W_out, cfg_C_out;
     logic [31:0] cfg_stride;
-    logic [31:0] cfg_weight_base;
+    logic [31:0] cfg_weight_base; // K * K * C_In * C_out
     logic [31:0] cfg_bias_base;
 
     // ----------------------------------------------------------------
@@ -115,6 +115,7 @@ module yolo_tiny_top #(
         .H_in(cfg_H_in), .W_in(cfg_W_in), .C(cfg_C_in),
         .start(pool_start),
         .o_buffer(pool_obuf),
+        .stride(cfg_stride),
         .done(pool_done)
     );
 
@@ -242,6 +243,10 @@ module yolo_tiny_top #(
                 if(ping) buf_a <= cat_obuf;
                 else     buf_b <= cat_obuf;
             end
+            if (current_state == ROUTE_RESTORE) begin
+                if (ping) buf_b <= route8_buf;
+                else      buf_a <= route8_buf;
+            end
         end
     end
 
@@ -252,14 +257,268 @@ module yolo_tiny_top #(
         up_start = 0;
         cat_start = 0;
         done = 0;
+        cfg_weight_base = 0;
+        cfg_bias_base   = 0;
+        cfg_H_in  = 0; cfg_W_in  = 0; cfg_C_in  = 0;
+        cfg_H_out = 0; cfg_W_out = 0; cfg_C_out = 0;
+        cfg_stride = 1;
         case(current_state)
             IDLE: begin
-                conv_start = 0;
-                pool_start = 0;
-                up_start = 0;
-                cat_start = 0;
-                done = 0;
+                if(start) begin
+                    next_state = CONV1_START;
+                end
             end
+            CONV1_START: begin
+                next_state = CONV1_WAIT;
+                conv_start = 1;
+                cfg_weight_base = 32'd0;
+                cfg_bias_base   = 32'd0;
+                cfg_H_in = 416; cfg_W_in = 416; cfg_C_in = 3;
+                cfg_H_out = 416; cfg_W_out = 416; cfg_C_out = 16;
+                cfg_stride = 1;
+            end
+            CONV1_WAIT: begin
+                cfg_H_in = 416; cfg_W_in = 416; cfg_C_in = 3;
+                cfg_H_out = 416; cfg_W_out = 416; cfg_C_out = 16;
+                if(conv_done) next_state = POOL1_START;
+            end
+            POOL1_START: begin
+               pool_start = 1;
+               next_state = POOL1_WAIT;
+               cfg_stride = 2;
+               cfg_H_in = 416; cfg_W_in = 416; cfg_C_in = 16;
+            end
+            POOL1_WAIT: begin
+                cfg_H_in = 416; cfg_W_in = 416; cfg_C_in = 16;
+                if(pool_done) next_state = CONV2_START;
+            end
+            CONV2_START: begin
+                next_state = CONV2_WAIT;
+                conv_start = 1;
+                cfg_weight_base = 32'd432;
+                cfg_bias_base   = 32'd16;
+                cfg_H_in = 208; cfg_W_in = 208; cfg_C_in = 16;
+                cfg_H_out = 208; cfg_W_out = 208; cfg_C_out = 32;
+                cfg_stride = 1;
+            end
+            CONV2_WAIT: begin
+                cfg_H_in = 208; cfg_W_in = 208; cfg_C_in = 16;
+                cfg_H_out = 208; cfg_W_out = 208; cfg_C_out = 32;
+                if(conv_done) next_state = POOL2_START;
+            end
+            POOL2_START: begin
+               pool_start = 1;
+               next_state = POOL2_WAIT;
+               cfg_stride = 2;
+               cfg_H_in = 208; cfg_W_in = 208; cfg_C_in = 32;
+            end
+            POOL2_WAIT: begin
+                cfg_H_in = 208; cfg_W_in = 208; cfg_C_in = 32;
+                if(pool_done) next_state = CONV3_START;
+            end
+            CONV3_START: begin
+                next_state = CONV3_WAIT;
+                conv_start = 1;
+                cfg_weight_base = 32'd5040;
+                cfg_bias_base   = 32'd48;
+                cfg_H_in = 104; cfg_W_in = 104; cfg_C_in = 32;
+                cfg_H_out = 104; cfg_W_out = 104; cfg_C_out = 64;
+                cfg_stride = 1;
+            end
+            CONV3_WAIT: begin
+                cfg_H_in = 104; cfg_W_in = 104; cfg_C_in = 32;
+                cfg_H_out = 104; cfg_W_out = 104; cfg_C_out = 64;
+                if(conv_done) next_state = POOL3_START;
+            end
+            POOL3_START: begin
+               pool_start = 1;
+               cfg_stride = 2;
+               next_state = POOL3_WAIT;
+               cfg_H_in = 104; cfg_W_in = 104; cfg_C_in = 64;
+            end
+            POOL3_WAIT: begin
+                cfg_H_in = 104; cfg_W_in = 104; cfg_C_in = 64;
+                if(pool_done) next_state = CONV4_START;
+            end
+            CONV4_START: begin
+                next_state = CONV4_WAIT;
+                conv_start = 1;
+                cfg_weight_base = 32'd23472;
+                cfg_bias_base   = 32'd112;
+                cfg_H_in = 52; cfg_W_in = 52; cfg_C_in = 64;
+                cfg_H_out = 52; cfg_W_out = 52; cfg_C_out = 128;
+                cfg_stride = 1;
+            end
+            CONV4_WAIT: begin
+                cfg_H_in = 52; cfg_W_in = 52; cfg_C_in = 64;
+                cfg_H_out = 52; cfg_W_out = 52; cfg_C_out = 128;
+                if(conv_done) next_state = POOL4_START;
+            end
+            POOL4_START: begin
+               pool_start = 1;
+               cfg_stride = 2;
+               next_state = POOL4_WAIT;
+               cfg_H_in = 52; cfg_W_in = 52; cfg_C_in = 128;
+            end
+            POOL4_WAIT: begin
+                cfg_H_in = 52; cfg_W_in = 52; cfg_C_in = 128;
+                if(pool_done) next_state = CONV5_START;
+            end
+            CONV5_START: begin
+                next_state = CONV5_WAIT;
+                conv_start = 1;
+                cfg_weight_base = 32'd97200;
+                cfg_bias_base   = 32'd240;
+                cfg_H_in = 26; cfg_W_in = 26; cfg_C_in = 128;
+                cfg_H_out = 26; cfg_W_out = 26; cfg_C_out = 256;
+                cfg_stride = 1;
+            end
+            CONV5_WAIT: begin
+                cfg_H_in = 26; cfg_W_in = 26; cfg_C_in = 128;
+                cfg_H_out = 26; cfg_W_out = 26; cfg_C_out = 256;
+                if(conv_done) next_state = SAVE_ROUTE;
+            end
+            SAVE_ROUTE: begin
+                next_state = POOL5_START;
+            end
+            POOL5_START: begin
+               pool_start = 1;
+               cfg_stride = 2;
+               next_state = POOL5_WAIT;
+               cfg_H_in = 26; cfg_W_in = 26; cfg_C_in = 256;
+            end
+            POOL5_WAIT: begin
+                cfg_H_in = 26; cfg_W_in = 26; cfg_C_in = 256;
+                if(pool_done) next_state = CONV6_START;
+            end
+            CONV6_START: begin
+                next_state = CONV6_WAIT;
+                conv_start = 1;
+                cfg_weight_base = 32'd392112;
+                cfg_bias_base   = 32'd496;
+                cfg_H_in = 13; cfg_W_in = 13; cfg_C_in = 256;
+                cfg_H_out = 13; cfg_W_out = 13; cfg_C_out = 512;
+                cfg_stride = 1;
+            end
+            CONV6_WAIT: begin
+                cfg_H_in = 13; cfg_W_in = 13; cfg_C_in = 256;
+                cfg_H_out = 13; cfg_W_out = 13; cfg_C_out = 512;
+                if(conv_done) next_state = POOL6_START;
+            end
+            POOL6_START: begin
+               pool_start = 1;
+               cfg_stride = 1;
+               next_state = POOL6_WAIT;
+               cfg_H_in = 13; cfg_W_in = 13; cfg_C_in = 512;
+            end
+            POOL6_WAIT: begin
+                cfg_H_in = 13; cfg_W_in = 13; cfg_C_in = 512;
+                if(pool_done) next_state = CONV7_START;
+            end
+            CONV7_START: begin
+                next_state = CONV7_WAIT;
+                conv_start = 1;
+                cfg_weight_base = 32'd1571760;
+                cfg_bias_base   = 32'd1008;
+                cfg_H_in = 13; cfg_W_in = 13; cfg_C_in = 512;
+                cfg_H_out = 13; cfg_W_out = 13; cfg_C_out = 1024;
+                cfg_stride = 1;
+            end
+            CONV7_WAIT: begin
+                cfg_H_in = 13; cfg_W_in = 13; cfg_C_in = 512;
+                cfg_H_out = 13; cfg_W_out = 13; cfg_C_out = 1024;
+                if(conv_done) next_state = CONV8_START;
+            end
+            CONV8_START: begin
+                next_state = CONV8_WAIT;
+                conv_start = 1;
+                cfg_weight_base = 32'd6290352;
+                cfg_bias_base   = 32'd2032;
+                cfg_H_in = 13; cfg_W_in = 13; cfg_C_in = 1024;
+                cfg_H_out = 13; cfg_W_out = 13; cfg_C_out = 256;
+                cfg_stride = 1;
+            end
+            CONV8_WAIT: begin
+                cfg_H_in = 13; cfg_W_in = 13; cfg_C_in = 1024;
+                cfg_H_out = 13; cfg_W_out = 13; cfg_C_out = 256;
+                if(conv_done) next_state = CONV9_START;
+            end
+            CONV9_START: begin
+                next_state = CONV9_WAIT;
+                conv_start = 1;
+                cfg_weight_base = 32'd6552496;
+                cfg_bias_base   = 32'd2288;
+                cfg_H_in = 13; cfg_W_in = 13; cfg_C_in = 256;
+                cfg_H_out = 13; cfg_W_out = 13; cfg_C_out = 512;
+                cfg_stride = 1;
+            end
+            CONV9_WAIT: begin
+                cfg_H_in = 13; cfg_W_in = 13; cfg_C_in = 256;
+                cfg_H_out = 13; cfg_W_out = 13; cfg_C_out = 512;
+                if(conv_done) next_state = YOLO1;
+            end
+            YOLO1: begin
+                next_state = ROUTE_RESTORE;
+            end
+            ROUTE_RESTORE: begin
+                next_state = CONV10_START;
+            end
+            CONV10_START: begin
+                next_state = CONV10_WAIT;
+                conv_start = 1;
+                cfg_weight_base = 32'd7732144;
+                cfg_bias_base   = 32'd2800;
+                cfg_H_in = 13; cfg_W_in = 13; cfg_C_in = 256;
+                cfg_H_out = 13; cfg_W_out = 13; cfg_C_out = 128;
+                cfg_stride = 1;
+            end
+            CONV10_WAIT: begin
+                cfg_H_in = 13; cfg_W_in = 13; cfg_C_in = 256;
+                cfg_H_out = 13; cfg_W_out = 13; cfg_C_out = 128;
+                if(conv_done) next_state = UPSAMP_START;
+            end
+            UPSAMP_START: begin
+                up_start = 1;
+                next_state = UPSAMP_WAIT;
+                cfg_H_in = 13; cfg_W_in = 13; cfg_C_in = 128;
+            end
+            UPSAMP_WAIT: begin
+                cfg_H_in = 13; cfg_W_in = 13; cfg_C_in = 128;
+                if(up_done) next_state = CONCAT_START;
+            end
+            CONCAT_START: begin
+                cat_start = 1;
+                next_state = CONCAT_WAIT;
+                cfg_H_out = 26; cfg_W_out = 26; cfg_C_in = 128;
+            end
+            CONCAT_WAIT: begin
+                cfg_H_out = 26; cfg_W_out = 26; cfg_C_in = 128;
+                if(cat_done) next_state = CONV11_START;
+            end
+            CONV11_START: begin
+                next_state = CONV11_WAIT;
+                conv_start = 1;
+                cfg_weight_base = 32'd7764912;
+                cfg_bias_base   = 32'd2928;
+                cfg_H_in = 26; cfg_W_in = 26; cfg_C_in = 384;
+                cfg_H_out = 26; cfg_W_out = 26; cfg_C_out = 256;
+                cfg_stride = 1;
+            end
+            CONV11_WAIT: begin
+                if(conv_done) begin
+                    next_state = YOLO2;
+                end
+            end
+            YOLO2: begin
+                next_state = ALL_DONE;
+            end
+            ALL_DONE: begin
+                done = 1;
+                next_state = IDLE;
+            end
+            
+            
+
         endcase
     end
 endmodule

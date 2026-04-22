@@ -14,12 +14,13 @@ module maxpool2d #(
     input  logic [31:0] H_in,
     input  logic [31:0] W_in,
     input  logic [31:0] C,
+    input  logic [31:0] stride,
     output logic signed [7:0]  o_buffer [OBUF_DEPTH-1:0],
     output logic done
 );
     logic [31:0] H_out, W_out;
-    assign H_out = H_in >> 1;
-    assign W_out = W_in >> 1;
+    assign H_out = (H_in / stride);
+    assign W_out = (W_in / stride);
 
     // Output pixel counter
     logic [31:0] y_out, x_out, c_out;
@@ -32,10 +33,10 @@ module maxpool2d #(
     localparam OADDR_BITS = $clog2(OBUF_DEPTH);
 
     // Address of the 2x2 window top-left = (y_out*2, x_out*2)
-    assign addr00 = ((y_out*2+0) * W_in + (x_out*2+0)) * C + c_out;
-    assign addr01 = ((y_out*2+0) * W_in + (x_out*2+1)) * C + c_out;
-    assign addr10 = ((y_out*2+1) * W_in + (x_out*2+0)) * C + c_out;
-    assign addr11 = ((y_out*2+1) * W_in + (x_out*2+1)) * C + c_out;
+    assign addr00 = ((y_out*stride+0) * W_in + (x_out*stride+0)) * C + c_out;
+    assign addr01 = ((y_out*stride+0) * W_in + (x_out*stride+1)) * C + c_out;
+    assign addr10 = ((y_out*stride+1) * W_in + (x_out*stride+0)) * C + c_out;
+    assign addr11 = ((y_out*stride+1) * W_in + (x_out*stride+1)) * C + c_out;
 
     assign v00 = i_buffer[addr00[IADDR_BITS-1:0]];
     assign v01 = i_buffer[addr01[IADDR_BITS-1:0]];
