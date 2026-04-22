@@ -225,6 +225,23 @@ module yolo_tiny_top #(
             begin
                 ping <= ~ping;
             end
+
+            if(current_state == SAVE_ROUTE) begin
+                route_buf <= ping ? buf_b: buf_a;
+            end
+            if(current_state == CONV8_WAIT && conv_done) begin
+                route8_buf <= ping ? buf_b: buf_a;
+            end
+            if(current_state == YOLO1) begin
+                det1_buf <= ping ? buf_b: buf_a;
+            end
+            if(current_state == YOLO2) begin
+                det2_buf <= ping ? buf_b: buf_a;
+            end
+            if(cat_done && current_state == CONCAT_WAIT) begin
+                if(ping) buf_a <= cat_obuf;
+                else     buf_b <= cat_obuf;
+            end
         end
     end
 
