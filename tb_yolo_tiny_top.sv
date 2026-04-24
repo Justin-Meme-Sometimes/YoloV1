@@ -62,9 +62,6 @@ module tb_yolo_tiny_top;
     end
 
     initial begin
-        $dumpfile("tb_yolo_tiny_top.vcd");
-        $dumpvars(0, tb_yolo_tiny_top);
-
         rst_n       = 0;
         start       = 0;
         cycle_count = 0;

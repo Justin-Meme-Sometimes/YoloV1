@@ -228,16 +228,19 @@ module yolo_tiny_top #(
             end
 
             if(current_state == SAVE_ROUTE) begin
-                route_buf <= ping ? buf_b: buf_a;
+                for (int i = 0; i < ROUTE_DEPTH; i++)
+                    route_buf[i] <= ping ? buf_b[i] : buf_a[i];
             end
             if(current_state == CONV8_WAIT && conv_done) begin
                 route8_buf <= ping ? buf_b: buf_a;
             end
             if(current_state == YOLO1) begin
-                det1_buf <= ping ? buf_b: buf_a;
+                for (int i = 0; i < DET1_DEPTH; i++)
+                    det1_buf[i] <= ping ? buf_b[i] : buf_a[i];
             end
             if(current_state == YOLO2) begin
-                det2_buf <= ping ? buf_b: buf_a;
+                for (int i = 0; i < DET2_DEPTH; i++)
+                    det2_buf[i] <= ping ? buf_b[i] : buf_a[i];
             end
             if(cat_done && current_state == CONCAT_WAIT) begin
                 if(ping) buf_a <= cat_obuf;
