@@ -69,65 +69,6 @@ module axi_master_rd #(
     assign M_AXI_ARLEN   = burst_len;
     assign M_AXI_RREADY  = (state == RECV);
 
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            state         <= IDLE;
-            done          <= 1'b0;
-            M_AXI_ARVALID <= 1'b0;
-            bram_we       <= 1'b0;
-            cur_addr      <= '0;
-            beats_left    <= '0;
-            bram_ptr      <= '0;
-            burst_len     <= '0;
-        end else begin
-            done    <= 1'b0;
-            bram_we <= 1'b0;
-
-            case (state)
-                IDLE: begin
-                    if (start) begin
-                        cur_addr   <= src_addr;
-                        beats_left <= (byte_count + BYTES_PER_BEAT - 1) / BYTES_PER_BEAT;
-                        bram_ptr   <= '0;
-                        state      <= ISSUE_AR;
-                    end
-                end
-
-                ISSUE_AR: begin
-                    burst_len     <= (beats_left >= MAX_BURST) ? (MAX_BURST - 1)
-                                                               : (beats_left - 1);
-                    M_AXI_ARVALID <= 1'b1;
-                    state         <= RECV;
-                end
-
-                RECV: begin
-                    if (M_AXI_ARVALID && M_AXI_ARREADY)
-                        M_AXI_ARVALID <= 1'b0;
-
-                    if (M_AXI_RVALID) begin
-                        bram_waddr <= bram_ptr;
-                        bram_wdata <= M_AXI_RDATA;
-                        bram_we    <= 1'b1;
-                        bram_ptr   <= bram_ptr + 1;
-                        beats_left <= beats_left - 1;
-
-                        if (M_AXI_RLAST) begin
-                            if (beats_left == 1)
-                                state <= FINISH;
-                            else begin
-                                cur_addr <= cur_addr + (burst_len + 1) * BYTES_PER_BEAT;
-                                state    <= ISSUE_AR;
-                            end
-                        end
-                    end
-                end
-
-                FINISH: begin
-                    done  <= 1'b1;
-                    state <= IDLE;
-                end
-            endcase
-        end
-    end
+ 
 
 endmodule
