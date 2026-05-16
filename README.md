@@ -97,27 +97,5 @@ The compute core and FSM are synthesizable as written. The flat array ports (`we
 | `M_AXI_HP1` | AXI4 master | Weight/bias reads from DDR |
 
 **Python (PYNQ) workflow:**
-```python
-from pynq import Overlay, allocate
-import numpy as np
-
-ol = Overlay("yolo_tiny.bit")
-
-weight_buf = allocate(shape=(8649648,), dtype=np.int8)
-image_buf  = allocate(shape=(519168,),  dtype=np.int8)
-det1_buf   = allocate(shape=(43095,),   dtype=np.int8)
-det2_buf   = allocate(shape=(172380,),  dtype=np.int8)
-
-# Load quantized weights and input image...
-
-ol.yolo.weight_addr = weight_buf.physical_address
-ol.yolo.image_addr  = image_buf.physical_address
-ol.yolo.det1_addr   = det1_buf.physical_address
-ol.yolo.det2_addr   = det2_buf.physical_address
-ol.yolo.start = 1
-while not ol.yolo.done:
-    pass
-# det1_buf and det2_buf now contain raw detection outputs
-```
-
+WIP
 > The AXI wrapper is not yet implemented — the current RTL is the compute core only.
