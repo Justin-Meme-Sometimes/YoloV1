@@ -64,16 +64,6 @@ Conv11 (26×26×256)  →  YOLO Head 2  →  det2_buf (26×26×255)
 
 ## Top-Level Parameters
 
-```systemverilog
-parameter WEIGHT_DEPTH = 8649648   // all layer weights concatenated
-parameter BIAS_DEPTH   = 4096      // padded to power of 2
-parameter IMG_DEPTH    = 519168    // 416×416×3
-parameter BUF_DEPTH    = 2752512   // 416×416×16 (largest intermediate)
-parameter ROUTE_DEPTH  = 172032    // 26×26×256 (saved route)
-parameter DET1_DEPTH   = 43095     // 13×13×255
-parameter DET2_DEPTH   = 172380    // 26×26×255
-```
-
 ## Simulation
 
 Individual module tests run fine. The full-network testbench (`tb_yolo_tiny_top.sv`) elaborates and compiles correctly but full 416×416 behavioral simulation is not practical — the complete forward pass takes hundreds of millions of cycles. Use it for FSM sanity checks with a modified (reduced-dimension) build, or test submodules individually.
