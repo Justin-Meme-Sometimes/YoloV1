@@ -48,10 +48,10 @@ module axi_master_rd #(
     localparam BYTES_PER_BEAT = DATA_WIDTH / 8;   // 16
     localparam MAX_BURST      = 256;              // AXI4 max beats per burst
 
-    typedef enum logic [1:0] { IDLE, ISSUE_AR, RECV, FINISH } state_t;
-    state_t state;
+    typedef enum logic [3:0] { IDLE, ISSUE_AR, RECV, FINISH } state_t;
+    state_t current_state, next_state;
 
-    logic [ADDR_WIDTH-1:0] cur_addr;
+    logic [ADDR_WIDTH-1:0] curr_addr;
     logic [31:0]           beats_left;
     logic [31:0]           bram_ptr;
     logic [7:0]            burst_len;  // ARLEN = beats - 1
@@ -65,9 +65,82 @@ module axi_master_rd #(
     assign M_AXI_ARPROT  = 3'b000;
 
     // Driven from registers
-    assign M_AXI_ARADDR  = cur_addr;
+    assign M_AXI_ARADDR  = curr_addr;
     assign M_AXI_ARLEN   = burst_len;
-    assign M_AXI_RREADY  = (state == RECV);
+    assign done = (current_state ==  FINISH);
+    assign bram_we = (current_state == RECV) && M_AXI_RVALID;
+    assign bram_waddr = bram_ptr;
+    assign bram_wdata = M_AXI_RDATA;
+
+    always_ff @(posedge clk, negedge rst_n) begin
+        if(!rst_n) begin
+            current_state <= IDLE;
+        end else begin
+            current_state <= next_state;
+        end
+    end
+
+    always_ff @(posedge clk, negedge rst_n) begin
+        if(!rst_n) begin
+            curr_addr <= 0;
+            beats_left <= 0;
+            bram_ptr  <= 0;
+            burst_len <= 0;
+        end else begin
+         if(current_state == IDLE && start) begin
+                beats_left <= byte_count >> 4;
+                curr_addr <= src_addr;
+                bram_ptr  <= 0;
+            end 
+            if(current_state == RECV && M_AXI_RLAST) begin
+                curr_addr <= curr_addr + (burst_len  + 1) * 16;
+            end
+            if(current_state == RECV && M_AXI_RVALID) begin
+                bram_ptr <= bram_ptr + 1;
+                beats_left <= beats_left - 1;
+            end
+            if(current_state == ISSUE_AR && next_state == RECV) begin
+                 burst_len <= ((beats_left-1) < 255) ? (beats_left-1) : 255;
+            end
+        end
+    end
+
+    always_comb begin
+        next_state = current_state;
+        M_AXI_ARVALID = 0;
+        M_AXI_RREADY = 0;
+        case(current_state)
+            IDLE: begin
+                if(start) begin
+                    next_state = ISSUE_AR;
+                end else begin
+                    next_state = IDLE;
+                end
+            end
+            ISSUE_AR: begin
+                M_AXI_ARVALID = 1;
+                if(M_AXI_ARREADY) begin
+                    next_state = RECV;
+                end else begin
+                    next_state = ISSUE_AR;
+                end
+            end
+            RECV: begin
+                M_AXI_RREADY = 1;
+                if(M_AXI_RVALID) begin
+                    next_state = RECV;
+                    if(M_AXI_RLAST && beats_left == 1) begin
+                        next_state = FINISH;
+                    end else if(M_AXI_RLAST && beats_left != 1) begin
+                        next_state = ISSUE_AR;
+                    end
+                end 
+            end
+            FINISH: begin
+                next_state = IDLE;
+            end
+        endcase
+    end
 
  
 
