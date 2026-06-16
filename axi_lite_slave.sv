@@ -97,6 +97,53 @@ module axi_lite_slave #(
     assign S_AXI_AWREADY = !aw_active;
     assign S_AXI_WREADY  = aw_active;
     assign S_AXI_BRESP   = 2'b00;
+    assign S_AXI_RDATA   = reg_file[ar_idx];
+    assign S_AXI_RRESP   = 2'b00;
 
+    assign S_AXI_ARREADY = !S_AXI_RVALID;
 
+    logic [3:0] ar_idx;
+
+    always_ff @(posedge S_AXI_ACLK or negedge S_AXI_ARESETN) begin
+        if (!S_AXI_ARESETN) begin
+            aw_active      <= 0;
+            aw_idx         <= 0;
+            ar_idx         <= 0;
+            S_AXI_BVALID   <= 0;
+            S_AXI_RVALID   <= 0;
+            for (int i = 0; i < 16; i++) reg_file[i] <= 0;
+        end else begin
+            // Write address channel
+            if (S_AXI_AWVALID && !aw_active) begin
+                aw_idx    <= S_AXI_AWADDR[5:2];
+                aw_active <= 1;
+            end
+
+            // Write data channel
+            if (S_AXI_WVALID && aw_active) begin
+                reg_file[aw_idx] <= S_AXI_WDATA;
+                aw_active        <= 0;
+                S_AXI_BVALID     <= 1;
+            end
+
+            // Write response channel
+            if (S_AXI_BVALID && S_AXI_BREADY)
+                S_AXI_BVALID <= 0;
+
+            // Read address channel
+            if (S_AXI_ARVALID && !S_AXI_RVALID) begin
+                ar_idx       <= S_AXI_ARADDR[5:2];
+                S_AXI_RVALID <= 1;
+            end
+
+            // Read data channel
+            if (S_AXI_RVALID && S_AXI_RREADY)
+                S_AXI_RVALID <= 0;
+
+            // Special registers — always reflect hardware state
+            reg_file[0][0] <= 0;              // auto-clear start pulse
+            reg_file[0][1] <= done;           // done (read-only)
+            reg_file[1][5:0] <= fsm_state;   // FSM state (read-only)
+        end
+    end
 endmodule
