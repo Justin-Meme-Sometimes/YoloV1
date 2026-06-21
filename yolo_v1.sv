@@ -16,8 +16,6 @@ module conv_2d #(
 ) (
     input  logic clk,
     input  logic rst_n,
-    input  logic signed [7:0]  weight_buffer [WBUF_DEPTH-1:0],
-    input  logic signed [7:0]  i_buffer      [IBUF_DEPTH-1:0],
     input  logic signed [31:0] bias          [31:0],
     input  logic [31:0] C_out,
     input  logic [31:0] H_out,
@@ -27,7 +25,13 @@ module conv_2d #(
     input  logic [31:0] W_in,
     input  logic [31:0] weight_base,
     input  logic start_process,
-    output logic signed [7:0]  output_buffer [OBUF_DEPTH-1:0],
+    output  logic [31:0]  wbram_addr,
+    input  logic [127:0]  wbram_rdata,
+    output logic [31:0]  ibram_addr,
+    input  logic [127:0] ibram_rdata,
+    output logic [31:0]  obram_addr,
+    output logic [127:0] obram_wdata,
+    output logic         obram_we,
     output logic done
 );
     // ----------------------------------------------------------------
@@ -38,6 +42,7 @@ module conv_2d #(
     assign num_chunks = (total_macs + NUM_MACS - 1) / NUM_MACS;
 
     logic [31:0] chunk;
+
     logic [15:0] y_out, x_out, c_out;
 
     logic is_last_chunk;
@@ -103,7 +108,7 @@ module conv_2d #(
     logic [31:0] m_ky_idx   [0:63];
     logic [31:0] input_addrs  [0:63];
     logic [31:0] weight_addrs [0:63];
-
+    logic in_preload;
     always_comb begin
         for (int m = 0; m < NUM_MACS; m++) begin
             input_addrs[m]  = '0;
@@ -144,9 +149,13 @@ module conv_2d #(
                 input_vals[i]  <= '0;
             end
         end else begin
-            for (int i = 0; i < NUM_MACS; i++) begin
-                weight_vals[i] <= weight_buffer[weight_addrs[i][WADDR_BITS-1:0]];
-                input_vals[i]  <= i_buffer[input_addrs[i][IADDR_BITS-1:0]];
+            // for (int i = 0; i < NUM_MACS; i++) begin
+            //     weight_vals[i] <= weight_buffer[weight_addrs[i][WADDR_BITS-1:0]];
+            //     input_vals[i]  <= i_buffer[input_addrs[i][IADDR_BITS-1:0]];
+            // end
+            if(in_preload && rd_rdx > 0 && rd_rdx <= 64) begin
+                input_vals[rd_rdx-1] <= $signed(ibram_rdata[input_addrs[rd_rdx-1][3:0] * 8 +: 8]);
+                weight_vals[rd_rdx-1] <= $signed(wbram_rdata[weight_addrs[rd_rdx-1][3:0] * 8 +: 8]);
             end
         end
     end
@@ -166,7 +175,7 @@ module conv_2d #(
         .weights(weight_vals),
         .ifmap(input_vals),
         .result(conv_res),
-        .out_valid()   // unused; FSM owns output timing
+        .out_valid()
     );
 
     // ----------------------------------------------------------------
@@ -190,15 +199,56 @@ module conv_2d #(
     logic [31:0] output_addr;
     assign output_addr = 32'(y_out) * W_out * C_out + 32'(x_out) * C_out + 32'(c_out);
 
+
+
+    logic [127:0] wr_buf;
+    logic [31:0] wr_word_addr;
+    logic last_pixel;
+
+    assign obram_wdata = wr_buf;
+    assign obram_addr = wr_word_addr;
+    assign last_pixel = is_y_out_max && is_x_out_max && is_c_out_max;
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            for (int i = 0; i < OBUF_DEPTH; i++)
-                output_buffer[i] <= '0;
-        end else if (output_write) begin
-            output_buffer[output_addr[OADDR_BITS-1:0]] <= clipped;
+        if(!rst_n) begin
+            wr_buf <= '0;
+            wr_word_addr <= '0;
+            obram_we <= '0;
+        end else begin
+            obram_we <= 0;
+            if(output_write) begin
+                wr_buf[output_addr[3:0] * 8 +: 8] <= clipped; // pack the wr_buffer
+                wr_word_addr <= output_addr >> 4; //????
+                if(output_addr[3:0] == 4'hF || last_pixel) obram_we <= 1; //full word
+            end
         end
     end
 
+    logic inc_rdx;
+    logic [31:0] rd_rdx;
+    logic done_rdx, clr_rdx;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if(!rst_n) begin
+            rd_rdx <= 0;
+        end else begin
+            if(clr_rdx) begin
+                rd_rdx <= '0;
+            end
+            if(inc_rdx) begin
+                rd_rdx <= rd_rdx + 1;
+            end
+        end
+    end
+
+    always_comb begin
+        ibram_addr = '0;
+        wbram_addr = '0;
+        if (in_preload && rd_rdx < NUM_MACS) begin
+            wbram_addr = weight_addrs[rd_rdx] >> 4;
+            ibram_addr = input_addrs[rd_rdx]  >> 4;
+        end
+    end
+
+    assign done_rdx = (rd_rdx == NUM_MACS + 1);
     // ----------------------------------------------------------------
     // FSM
     // ----------------------------------------------------------------
@@ -207,6 +257,8 @@ module conv_2d #(
         .start_process(start_process),
         .is_last_chunk(is_last_chunk),
         .is_c_out_max(is_c_out_max),
+        .inc_rdx(inc_rdx),
+        .done_rdx(done_rdx),
         .is_x_out_max(is_x_out_max),
         .is_y_out_max(is_y_out_max),
         .clr_chunk(clr_chunk),   .inc_chunk(inc_chunk),
@@ -215,6 +267,8 @@ module conv_2d #(
         .clr_y_out(clr_y_out),  .inc_y_out(inc_y_out),
         .accum_clr(accum_clr),
         .pixel_done(pixel_done),
+        .in_preload(in_preload),
+        .clr_rdx(clr_rdx),
         .output_write(output_write),
         .done(done)
     );
@@ -233,6 +287,10 @@ module conv_chunk_fsm (
     input  logic is_c_out_max,
     input  logic is_x_out_max,
     input  logic is_y_out_max,
+    input logic done_rdx,
+    output  logic inc_rdx,
+    output logic in_preload,
+    output logic clr_rdx,
     output logic clr_chunk,    inc_chunk,
     output logic clr_c_out,    inc_c_out,
     output logic clr_x_out,    inc_x_out,
@@ -242,11 +300,12 @@ module conv_chunk_fsm (
     output logic output_write,
     output logic done
 );
-    typedef enum logic [1:0] {
-        IDLE       = 2'd0,
-        CHUNK_LOAD = 2'd1,
-        ADVANCE    = 2'd2,
-        ALL_DONE   = 2'd3
+    typedef enum logic [2:0] {
+        IDLE       = 3'd0,
+        PRELOAD    = 3'd1,
+        CHUNK_LOAD = 3'd2,
+        ADVANCE    = 3'd3,
+        ALL_DONE   = 3'd4
     } state_t;
 
     state_t current_state, next_state;
@@ -265,7 +324,10 @@ module conv_chunk_fsm (
         accum_clr  = 1'b0;
         pixel_done = 1'b0;
         output_write = 1'b0;
+        clr_rdx = 1'b0;
         done       = 1'b0;
+        inc_rdx = 1'b0;
+        in_preload = 1'b0;
         next_state = current_state;
 
         case (current_state)
@@ -274,28 +336,32 @@ module conv_chunk_fsm (
                     clr_c_out = 1'b1; clr_x_out = 1'b1; clr_y_out = 1'b1;
                     clr_chunk = 1'b1;
                     accum_clr = 1'b1;
-                    next_state = CHUNK_LOAD;
+                    clr_rdx = 1'b1;
+                    next_state = PRELOAD;
                 end
             end
 
-            // Feed one chunk per cycle to the MAC array.
-            // Because the buffer lookup has 1-cycle latency, the data loaded
-            // into weight_vals/input_vals this cycle reflects the addresses
-            // that were computed last cycle (i.e., the current chunk index).
-            // out_valid = in_valid, so the accumulator captures each chunk
-            // result in the same cycle pixel_done is high.
+            PRELOAD: begin
+                if(done_rdx) begin 
+                    next_state = CHUNK_LOAD;
+                end else begin
+                    inc_rdx = 1;
+                    in_preload = 1'b1;
+                    next_state = PRELOAD;
+                end
+            end
+
             CHUNK_LOAD: begin
                 pixel_done = 1'b1;
                 if (is_last_chunk) begin
                     next_state = ADVANCE;
                 end else begin
                     inc_chunk  = 1'b1;
-                    next_state = CHUNK_LOAD;
+                    clr_rdx = 1'd1;
+                    next_state = PRELOAD;
                 end
             end
 
-            // Last chunk result is now in the accumulator (captured at the
-            // clock edge that brought us here). Write output, clear, advance.
             ADVANCE: begin
                 output_write = 1'b1;
                 clr_chunk    = 1'b1;
@@ -303,13 +369,16 @@ module conv_chunk_fsm (
 
                 if (!is_c_out_max) begin
                     inc_c_out  = 1'b1;
-                    next_state = CHUNK_LOAD;
+                    next_state = PRELOAD;
+                    clr_rdx = 1'b1;
                 end else if (!is_x_out_max) begin
                     clr_c_out  = 1'b1; inc_x_out = 1'b1;
-                    next_state = CHUNK_LOAD;
+                    next_state = PRELOAD;
+                    clr_rdx = 1'b1;
                 end else if (!is_y_out_max) begin
                     clr_c_out  = 1'b1; clr_x_out = 1'b1; inc_y_out = 1'b1;
-                    next_state = CHUNK_LOAD;
+                    next_state = PRELOAD;
+                    clr_rdx = 1'b1;
                 end else begin
                     next_state = ALL_DONE;
                 end

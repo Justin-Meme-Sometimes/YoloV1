@@ -76,9 +76,7 @@ module yolo_axi_top #(
     input  logic                    M_AXI_HP0_RVALID,
     output logic                    M_AXI_HP0_RREADY,
 
-    // ----------------------------------------------------------------
-    // AXI4 HP1 master — writes BRAM back to DDR (stores)
-    // ----------------------------------------------------------------
+  
     output logic [ID_WIDTH-1:0]     M_AXI_HP1_AWID,
     output logic [ADDR_WIDTH-1:0]   M_AXI_HP1_AWADDR,
     output logic [7:0]              M_AXI_HP1_AWLEN,
@@ -295,22 +293,121 @@ module yolo_axi_top #(
     );
 
     // ----------------------------------------------------------------
-    // Compute submodules
-    // TODO: replace flat array ports with ibram_b / wbram_b / obram_b BRAM ports
-    //       once submodule interfaces are updated for 1-cycle BRAM latency.
-    //       For now, instantiations are shown as structural placeholders.
+    // Compute submodule BRAM port B wires
     // ----------------------------------------------------------------
+    logic [31:0]  conv_ibram_addr, conv_wbram_addr, conv_obram_addr;
+    logic [127:0] conv_obram_wdata;
+    logic         conv_obram_we;
+    logic [127:0] conv_ibram_rdata, conv_wbram_rdata;
 
-    // conv_2d    u_conv  (.clk(clk), .rst_n(rst_n), .start_process(conv_start), .done(conv_done), ...);
-    // maxpool2d  u_pool  (.clk(clk), .rst_n(rst_n), .start(pool_start),         .done(pool_done), ...);
-    // upsample   u_up    (.clk(clk), .rst_n(rst_n), .start(up_start),           .done(up_done),   ...);
-    // route_concat u_cat (.clk(clk), .rst_n(rst_n), .start(cat_start),          .done(cat_done),  ...);
+    logic [31:0]  pool_ibram_addr, pool_obram_addr;
+    logic [127:0] pool_obram_wdata;
+    logic         pool_obram_we;
+    logic [127:0] pool_ibram_rdata;
 
-    // Tie done signals low until submodules are wired
-    assign conv_done = 1'b0;
-    assign pool_done = 1'b0;
-    assign up_done   = 1'b0;
-    assign cat_done  = 1'b0;
+    logic [31:0]  up_ibram_addr, up_obram_addr;
+    logic [127:0] up_obram_wdata;
+    logic         up_obram_we;
+    logic [127:0] up_ibram_rdata;
+
+    logic [31:0]  cat_ibram_addr, cat_wbram_addr, cat_obram_addr;
+    logic [127:0] cat_obram_wdata;
+    logic         cat_obram_we;
+    logic [127:0] cat_ibram_rdata, cat_wbram_rdata;
+
+    // ----------------------------------------------------------------
+    // Bias register file (tied to zero until bias loading is implemented)
+    // ----------------------------------------------------------------
+    logic signed [31:0] conv_bias [31:0];
+    genvar bi;
+    generate
+        for (bi = 0; bi < 32; bi++) assign conv_bias[bi] = 32'sd0;
+    endgenerate
+
+    // ----------------------------------------------------------------
+    // Compute submodule instantiations
+    // ----------------------------------------------------------------
+    conv_2d u_conv (
+        .clk          (clk),
+        .rst_n        (rst_n),
+        .ibram_addr   (conv_ibram_addr),
+        .ibram_rdata  (conv_ibram_rdata),
+        .wbram_addr   (conv_wbram_addr),
+        .wbram_rdata  (conv_wbram_rdata),
+        .obram_addr   (conv_obram_addr),
+        .obram_wdata  (conv_obram_wdata),
+        .obram_we     (conv_obram_we),
+        .bias         (conv_bias),
+        .C_out        (cfg_C_out),
+        .H_out        (cfg_H_out),
+        .W_out        (cfg_W_out),
+        .C_in         (cfg_C_in),
+        .stride       (cfg_stride),
+        .W_in         (cfg_W_in),
+        .weight_base  (cfg_weight_base),
+        .start_process(conv_start),
+        .done         (conv_done)
+    );
+
+    maxpool2d u_pool (
+        .clk          (clk),
+        .rst_n        (rst_n),
+        .start        (pool_start),
+        .ibram_addr   (pool_ibram_addr),
+        .ibram_rdata  (pool_ibram_rdata),
+        .obram_addr   (pool_obram_addr),
+        .obram_wdata  (pool_obram_wdata),
+        .obram_we     (pool_obram_we),
+        .H_in         (cfg_H_in),
+        .W_in         (cfg_W_in),
+        .C            (cfg_C_in),
+        .stride       (cfg_stride),
+        .done         (pool_done)
+    );
+
+    upsample u_up (
+        .clk          (clk),
+        .rst_n        (rst_n),
+        .start        (up_start),
+        .ibram_addr   (up_ibram_addr),
+        .ibram_rdata  (up_ibram_rdata),
+        .obram_addr   (up_obram_addr),
+        .obram_wdata  (up_obram_wdata),
+        .obram_we     (up_obram_we),
+        .H_in         (cfg_H_in),
+        .W_in         (cfg_W_in),
+        .C            (cfg_C_in),
+        .done         (up_done)
+    );
+
+    route_concat u_cat (
+        .clk          (clk),
+        .rst_n        (rst_n),
+        .start        (cat_start),
+        .ibram_addr   (cat_ibram_addr),
+        .ibram_rdata  (cat_ibram_rdata),
+        .wbram_addr   (cat_wbram_addr),
+        .wbram_rdata  (cat_wbram_rdata),
+        .obram_addr   (cat_obram_addr),
+        .obram_wdata  (cat_obram_wdata),
+        .obram_we     (cat_obram_we),
+        .H            (cfg_H_in),
+        .W            (cfg_W_in),
+        .C_a          (cfg_C_in),    // upsample output channels (a_buffer)
+        .C_b          (cfg_C_out),   // route_buf channels (b_buffer)
+        .done         (cat_done)
+    );
+
+    // ----------------------------------------------------------------
+    // BRAM port B mux — only one submodule active at a time
+    // conv and cat need ibram+wbram; pool and up need only ibram
+    // ----------------------------------------------------------------
+    assign conv_ibram_rdata = ibram_b_rdata;
+    assign conv_wbram_rdata = wbram_b_rdata;
+    assign pool_ibram_rdata = ibram_b_rdata;
+    assign up_ibram_rdata   = ibram_b_rdata;
+    assign cat_ibram_rdata  = ibram_b_rdata;
+    assign cat_wbram_rdata  = wbram_b_rdata;
 
     // ----------------------------------------------------------------
     // Tracked DDR addresses for special buffers
@@ -340,6 +437,7 @@ module yolo_axi_top #(
 
     mem_state_t  mem_state;
     logic        need_wbram;      // current layer needs a weight/route BRAM load
+    logic        need_cat;        // registered: current wbram load is for route_concat
     logic        use_up_buf_out;  // upsample output goes to up_buf_addr (not ping-pong)
     logic        use_route8_in;   // input comes from live_route8_addr (after ROUTE_RESTORE)
     logic [ADDR_WIDTH-1:0] store_target;  // DDR address to store obram into
@@ -352,6 +450,7 @@ module yolo_axi_top #(
             rd_to_wbram     <= 1'b0;
             wr_start        <= 1'b0;
             use_route8_in   <= 1'b0;
+            need_cat        <= 1'b0;
             live_route_addr  <= '0;
             live_route8_addr <= '0;
             store_target    <= '0;
@@ -393,6 +492,7 @@ module yolo_axi_top #(
                             store_target <= output_ddr_addr;
 
                         need_wbram <= conv_start || cat_start;
+                        need_cat   <= cat_start;
                         mem_state  <= M_LOAD_IBRAM;
                     end
 
@@ -418,9 +518,10 @@ module yolo_axi_top #(
                         if (need_wbram) begin
                             // Start loading wbram
                             rd_to_wbram <= 1'b1;
-                            if (cat_start) begin
+                            if (need_cat) begin
                                 rd_src_addr   <= live_route_addr;   // concat b = route_buf
                                 rd_byte_count <= 32'd172032;        // 26*26*256
+                                need_cat      <= 1'b0;
                             end else begin
                                 rd_src_addr   <= weight_addr + cfg_weight_base;
                                 rd_byte_count <= cfg_K * cfg_K * cfg_C_in * cfg_C_out;
@@ -477,17 +578,64 @@ module yolo_axi_top #(
     assign obram_a_wdata = '0;
     assign obram_a_we    = 1'b0;
 
-    // obram port B — compute submodules write here (TODO: wire to submodule outputs)
-    assign obram_b_addr  = '0;
-    assign obram_b_wdata = '0;
-    assign obram_b_we    = 1'b0;
+    // Running status: set on start pulse, cleared on done pulse
+    logic conv_run, pool_run, up_run, cat_run;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            conv_run <= 0; pool_run <= 0; up_run <= 0; cat_run <= 0;
+        end else begin
+            if (conv_start) conv_run <= 1; else if (conv_done) conv_run <= 0;
+            if (pool_start) pool_run <= 1; else if (pool_done) pool_run <= 0;
+            if (up_start)   up_run   <= 1; else if (up_done)   up_run   <= 0;
+            if (cat_start)  cat_run  <= 1; else if (cat_done)  cat_run  <= 0;
+        end
+    end
 
-    // ibram/wbram port B — compute submodules read here (TODO: wire to submodule inputs)
-    assign ibram_b_addr  = '0;
-    assign ibram_b_wdata = '0;
-    assign ibram_b_we    = 1'b0;
-    assign wbram_b_addr  = '0;
-    assign wbram_b_wdata = '0;
-    assign wbram_b_we    = 1'b0;
+    // ibram/wbram port B — route to the running compute submodule (read-only, we_b always 0)
+    always_comb begin
+        ibram_b_wdata = '0; ibram_b_we = 1'b0;
+        wbram_b_wdata = '0; wbram_b_we = 1'b0;
+        if (conv_run) begin
+            ibram_b_addr = conv_ibram_addr;
+            wbram_b_addr = conv_wbram_addr;
+        end else if (pool_run) begin
+            ibram_b_addr = pool_ibram_addr;
+            wbram_b_addr = '0;
+        end else if (up_run) begin
+            ibram_b_addr = up_ibram_addr;
+            wbram_b_addr = '0;
+        end else if (cat_run) begin
+            ibram_b_addr = cat_ibram_addr;
+            wbram_b_addr = cat_wbram_addr;
+        end else begin
+            ibram_b_addr = '0;
+            wbram_b_addr = '0;
+        end
+    end
+
+    // obram port B — mux writes from the running compute submodule
+    always_comb begin
+        if (conv_run) begin
+            obram_b_addr  = conv_obram_addr;
+            obram_b_wdata = conv_obram_wdata;
+            obram_b_we    = conv_obram_we;
+        end else if (pool_run) begin
+            obram_b_addr  = pool_obram_addr;
+            obram_b_wdata = pool_obram_wdata;
+            obram_b_we    = pool_obram_we;
+        end else if (up_run) begin
+            obram_b_addr  = up_obram_addr;
+            obram_b_wdata = up_obram_wdata;
+            obram_b_we    = up_obram_we;
+        end else if (cat_run) begin
+            obram_b_addr  = cat_obram_addr;
+            obram_b_wdata = cat_obram_wdata;
+            obram_b_we    = cat_obram_we;
+        end else begin
+            obram_b_addr  = '0;
+            obram_b_wdata = '0;
+            obram_b_we    = 1'b0;
+        end
+    end
 
 endmodule
