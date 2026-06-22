@@ -97,7 +97,7 @@ module tb_conv_2d;
 
     task automatic run_and_check(input string name, input logic signed [7:0] expected);
         logic signed [7:0] actual;
-        int t_start;
+        int t_start, watchdog;
 
         $display("  [t=%0d] start_process asserted", cycle_cnt);
         @(posedge clk); #1; start_process = 1;
@@ -106,11 +106,9 @@ module tb_conv_2d;
         $display("  [t=%0d]   preload phase: serializing %0d BRAM reads over %0d cycles",
                  cycle_cnt, 9, 10);
 
-        fork
-            @(posedge done);
-            begin repeat(5000) @(posedge clk); $display("TIMEOUT: %s", name); $finish; end
-        join_any
-        disable fork;
+        for (watchdog = 0; watchdog < 5000 && !done; watchdog++)
+            @(posedge clk);
+        if (!done) begin $display("TIMEOUT: %s", name); $finish; end
 
         $display("  [t=%0d] done asserted (%0d cycles elapsed)",
                  cycle_cnt, cycle_cnt - t_start);
@@ -138,6 +136,9 @@ module tb_conv_2d;
     endtask
 
     initial begin
+        $dumpfile("dump.vcd");
+        $dumpvars(0, tb_conv_2d);
+
         ibram_a_we = 0; ibram_a_addr = 0; ibram_a_wdata = 0;
         wbram_a_we = 0; wbram_a_addr = 0; wbram_a_wdata = 0;
         obram_a_addr = 0;

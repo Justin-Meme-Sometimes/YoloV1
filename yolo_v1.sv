@@ -102,35 +102,60 @@ module conv_2d #(
         calc_weight_addr = base + idx;
     endfunction
 
-    logic [31:0] flat_idx   [0:63];
-    logic [31:0] m_c_idx    [0:63];
-    logic [31:0] m_kx_idx   [0:63];
-    logic [31:0] m_ky_idx   [0:63];
-    logic [31:0] input_addrs  [0:63];
-    logic [31:0] weight_addrs [0:63];
-    logic in_preload;
-    always_comb begin
-        for (int m = 0; m < NUM_MACS; m++) begin
-            input_addrs[m]  = '0;
-            weight_addrs[m] = '0;
-            flat_idx[m]  = chunk * NUM_MACS + m;
-            m_c_idx[m]   = '0;
-            m_kx_idx[m]  = '0;
-            m_ky_idx[m]  = '0;
-            if (flat_idx[m] < total_macs) begin
-                m_c_idx[m]  = flat_idx[m] % C_in;
-                m_kx_idx[m] = (flat_idx[m] / C_in) % K;
-                m_ky_idx[m] = (flat_idx[m] / C_in) / K;
-                input_addrs[m]  = calc_input_addr(
-                    32'(y_out), 32'(x_out),
-                    m_ky_idx[m], m_kx_idx[m], m_c_idx[m],
-                    stride, W_in, C_in);
-                weight_addrs[m] = calc_weight_addr(
-                    32'(c_out),
-                    m_ky_idx[m], m_kx_idx[m], m_c_idx[m],
-                    K, C_in, weight_base);
+    logic [31:0] curr_m_c_idx;    
+    logic [31:0] curr_m_kx_idx;  
+    logic [31:0] curr_m_ky_idx;  
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            curr_m_ky_idx <= '0; 
+            curr_m_kx_idx <= '0;
+            curr_m_c_idx <= '0;
+        end else begin
+                if (clr_rdx) begin
+                    curr_m_ky_idx <= 0;
+                    curr_m_kx_idx <= 0;
+                    curr_m_c_idx <= 0;
+                end else if(inc_rdx) begin
+                    if(curr_m_kx_idx == K-1 && curr_m_c_idx == C_in-1) begin
+                        if (curr_m_ky_idx == K-1)  begin
+                            curr_m_ky_idx <= 0;
+                        end else begin
+                            curr_m_ky_idx <= curr_m_ky_idx + 1;
+                        end
+                    end
+                    if (curr_m_c_idx == C_in - 1) begin
+                        if (curr_m_kx_idx == K - 1) curr_m_kx_idx <= 0;
+                        else curr_m_kx_idx <= curr_m_kx_idx + 1;
+                    end
+                    if(curr_m_c_idx == C_in-1) begin
+                        curr_m_c_idx <= 0;
+                    end else begin
+                        curr_m_c_idx <= curr_m_c_idx + 1;
+                    end
             end
         end
+    end
+
+
+    logic [31:0] curr_flat_idx;   
+    logic [31:0] curr_input_addrs;
+    logic [31:0] curr_weight_addrs;
+    logic in_preload;
+    always_comb begin
+            curr_input_addrs  = '0;
+            curr_weight_addrs = '0;
+            curr_flat_idx = chunk * NUM_MACS + rd_rdx;
+            if (curr_flat_idx < total_macs) begin
+                curr_input_addrs  = calc_input_addr(
+                    32'(y_out), 32'(x_out),
+                    curr_m_ky_idx, curr_m_kx_idx, curr_m_c_idx,
+                    stride, W_in, C_in);
+                curr_weight_addrs = calc_weight_addr(
+                    32'(c_out),
+                    curr_m_ky_idx, curr_m_kx_idx, curr_m_c_idx,
+                    K, C_in, weight_base);
+            end
+    
     end
 
     // ----------------------------------------------------------------
@@ -142,20 +167,24 @@ module conv_2d #(
     logic signed [7:0] weight_vals [0:63];
     logic signed [7:0] input_vals  [0:63];
 
+    logic [3:0] prev_ibram_lane, prev_wbram_lane;
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
+            prev_ibram_lane <= '0;
+            prev_wbram_lane <= '0;
             for (int i = 0; i < NUM_MACS; i++) begin
                 weight_vals[i] <= '0;
                 input_vals[i]  <= '0;
             end
-        end else begin
-            // for (int i = 0; i < NUM_MACS; i++) begin
-            //     weight_vals[i] <= weight_buffer[weight_addrs[i][WADDR_BITS-1:0]];
-            //     input_vals[i]  <= i_buffer[input_addrs[i][IADDR_BITS-1:0]];
-            // end
-            if(in_preload && rd_rdx > 0 && rd_rdx <= 64) begin
-                input_vals[rd_rdx-1] <= $signed(ibram_rdata[input_addrs[rd_rdx-1][3:0] * 8 +: 8]);
-                weight_vals[rd_rdx-1] <= $signed(wbram_rdata[weight_addrs[rd_rdx-1][3:0] * 8 +: 8]);
+        end else begin  
+            if(in_preload) begin
+                prev_ibram_lane <= curr_input_addrs[3:0];
+                prev_wbram_lane <= curr_weight_addrs[3:0];
+            end
+            if(in_preload && rd_rdx > 0 && rd_rdx <= NUM_MACS) begin
+                input_vals[rd_rdx-1] <= $signed(ibram_rdata[prev_ibram_lane * 8 +: 8]);
+                weight_vals[rd_rdx-1] <= $signed(wbram_rdata[prev_wbram_lane * 8 +: 8]);
             end
         end
     end
@@ -243,8 +272,8 @@ module conv_2d #(
         ibram_addr = '0;
         wbram_addr = '0;
         if (in_preload && rd_rdx < NUM_MACS) begin
-            wbram_addr = weight_addrs[rd_rdx] >> 4;
-            ibram_addr = input_addrs[rd_rdx]  >> 4;
+            wbram_addr = curr_weight_addrs >> 4;
+            ibram_addr = curr_input_addrs >> 4;
         end
     end
 
