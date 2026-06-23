@@ -2,6 +2,11 @@
 
 SystemVerilog implementation of YOLOv3-Tiny targeting Zynq UltraScale+ (Ultra96v2 / ZU3EG). Processes 416×416 RGB images with int8 quantized weights and outputs detections at 13×13 and 26×26 scales.
 
+
+
+## Vivado Block Design
+![Block design](axi_bd.png)
+
 ## Network topology
 
 ```
